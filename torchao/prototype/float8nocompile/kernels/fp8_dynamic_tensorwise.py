@@ -44,8 +44,14 @@ class KernelAlgorithm(Enum):
 class MemoryLayout(Enum):
     """Enum for memory layout of input tensor."""
 
+    # return 1 output tensor with row-major memory layout
     ROW_MAJOR = "row_major"
+
+    # return 1 output tensor with column-major memory layout
     COL_MAJOR = "col_major"
+
+    # return 2 output tensors, one with row-major and the other with column-major memory layout
+    ROW_AND_COL_MAJOR = "ROW_AND_COL_MAJOR"
 
 
 kernel_configs = [
@@ -227,11 +233,9 @@ def triton_hp_tensor_to_float8_dynamic(
     algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
     memory_layout: MemoryLayout = MemoryLayout.ROW_MAJOR,
 ) -> Float8Tensor:
-    assert hp_tensor.is_contiguous(), "tensor must be contiguous"
 
     num_elements = hp_tensor.numel()
     orig_shape = hp_tensor.shape
-    flattened_input = hp_tensor.flatten()
 
     tl_input_dtype = FP8_DTYPE_MAP[hp_tensor.dtype]
     tl_output_dtype = FP8_DTYPE_MAP[fp8_dtype]
@@ -242,10 +246,6 @@ def triton_hp_tensor_to_float8_dynamic(
     # allocate memory for computed scale, local block maxes, and output fp8 tensor
     scale_out = torch.empty((1,), dtype=torch.float32, device=hp_tensor.device)
 
-    fp8_output = torch.empty_like(
-        flattened_input, dtype=fp8_dtype, device=hp_tensor.device
-    )
-
     grid = lambda meta: (triton.cdiv(num_elements, meta["BLOCK_SIZE"]),)
 
     # compute the fp8 scale using the given algorithm
@@ -253,7 +253,7 @@ def triton_hp_tensor_to_float8_dynamic(
         global_amax = torch.zeros((1,), dtype=torch.float32, device=hp_tensor.device)
         # compute global amax to be used for scaling
         _block_amax_atomic[grid](
-            flattened_input,
+            hp_tensor,
             global_amax,
             num_elements,
             input_dtype=tl_input_dtype,
@@ -278,7 +278,7 @@ def triton_hp_tensor_to_float8_dynamic(
         )
         # compute local amax for each block
         _block_amax_reduction[grid](
-            flattened_input,
+            hp_tensor,
             block_amaxes,
             num_elements,
             input_dtype=tl_input_dtype,
@@ -299,12 +299,19 @@ def triton_hp_tensor_to_float8_dynamic(
     else:
         raise ValueError(f"Unsupported kernel algorithm: {algo}")
 
-    # use the precomputed scale to perform conversion to fp8 with the given memory layout
-    if memory_layout == MemoryLayout.ROW_MAJOR:
+    fp8_tensor_row_major = None
+    fp8_tensor_col_major = None
+
+    # perform fp8 conversion with output in row major memory layout
+    if memory_layout in {MemoryLayout.ROW_MAJOR, MemoryLayout.ROW_AND_COL_MAJOR}:
+        fp8_output_row_major = torch.empty(
+            orig_shape, dtype=fp8_dtype, device=hp_tensor.device
+        )
+        # launch triton kernel to perform conversion
         _to_fp8_row_major[grid](
-            flattened_input,
+            hp_tensor,
             scale_out,
-            fp8_output,
+            fp8_output_row_major,
             num_elements,
             fp8_dtype_min,
             fp8_dtype_max,
@@ -312,16 +319,30 @@ def triton_hp_tensor_to_float8_dynamic(
             output_dtype=tl_output_dtype,
             EPS=EPS,
         )
-    elif memory_layout == MemoryLayout.COL_MAJOR:
+        # wrap in Float8Tensor
+        fp8_tensor_row_major = Float8Tensor(
+            fp8_output_row_major,
+            scale_out,
+            orig_dtype=hp_tensor.dtype,
+            linear_mm_config=linear_mm_config,
+            gemm_input_role=gemm_input_role,
+        )
+
+    # perform fp8 conversion with output in column major memory layout
+    if memory_layout in {MemoryLayout.COL_MAJOR, MemoryLayout.ROW_AND_COL_MAJOR}:
+        fp8_output_col_major = torch.empty(
+            orig_shape, dtype=fp8_dtype, device=hp_tensor.device
+        )
         num_rows, num_cols = orig_shape
         grid = lambda meta: (
             triton.cdiv(num_rows, meta["BLOCK_SIZE_ROWS"]),
             triton.cdiv(num_cols, meta["BLOCK_SIZE_COLS"]),
         )
+        # launch triton kernel to perform conversion
         _to_fp8_col_major[grid](
-            flattened_input,
+            hp_tensor,
             scale_out,
-            fp8_output,
+            fp8_output_col_major,
             num_elements,
             fp8_dtype_min,
             fp8_dtype_max,
@@ -331,21 +352,19 @@ def triton_hp_tensor_to_float8_dynamic(
             output_dtype=tl_output_dtype,
             EPS=EPS,
         )
-    else:
-        raise ValueError(f"Unsupported memory layout: {memory_layout}")
 
-    fp8_output = fp8_output.reshape(orig_shape)
+        # for col major we need to update the strides to reflect the new memory layout
+        col_major_strides = (1, num_rows)
+        fp8_output_col_major = fp8_output_col_major.as_strided(
+            fp8_output_col_major.size(), col_major_strides
+        )
 
-    # for column major output we need to update the stride
-    if memory_layout == MemoryLayout.COL_MAJOR:
-        rows = fp8_output.shape[0]
-        col_major_strides = (1, rows)
-        fp8_output = fp8_output.as_strided(fp8_output.size(), col_major_strides)
-
-    return Float8Tensor(
-        fp8_output,
-        scale_out,
-        orig_dtype=hp_tensor.dtype,
-        linear_mm_config=linear_mm_config,
-        gemm_input_role=gemm_input_role,
-    )
+        # wrap in Float8Tensor
+        fp8_tensor_col_major = Float8Tensor(
+            fp8_output_col_major,
+            scale_out,
+            orig_dtype=hp_tensor.dtype,
+            linear_mm_config=linear_mm_config,
+            gemm_input_role=gemm_input_role,
+        )
+    return fp8_tensor_row_major, fp8_tensor_col_major

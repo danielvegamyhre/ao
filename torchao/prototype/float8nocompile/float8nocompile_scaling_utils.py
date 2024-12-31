@@ -61,10 +61,10 @@ def hp_tensor_to_float8nocompile_dynamic(
     )
 
 
-class Float8NoCompileConversionFunc(torch.autograd.Function):
+class Float8Conversion(torch.autograd.Function):
     """
     A differentiable conversion to fp8.
-    * forward: convert from high precision to float8
+    * forward: convert from high precision to float8 and produces both row-major and column-major outputs
     * backward: pass the gradient without changes
     """
 
@@ -76,20 +76,82 @@ class Float8NoCompileConversionFunc(torch.autograd.Function):
         linear_mm_config: LinearMMConfig,
         gemm_input_role: GemmInputRole,
         kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
-        memory_layout: MemoryLayout = MemoryLayout.ROW_MAJOR,
     ):
-        return triton_hp_tensor_to_float8_dynamic(
+        fp8_row_major, fp8_col_major = triton_hp_tensor_to_float8_dynamic(
             tensor,
             float8_dtype,
             linear_mm_config,
             gemm_input_role,
             algo=kernel_algo,
-            memory_layout=memory_layout,
+            memory_layout=MemoryLayout.ROW_AND_COL_MAJOR,
         )
+        return fp8_row_major, fp8_col_major
 
     @staticmethod
     def backward(ctx, g):
-        return g, None, None, None, None, None
+        return g, None, None, None, None
+
+
+class Float8ConversionRowMajor(torch.autograd.Function):
+    """
+    A differentiable conversion to fp8.
+    * forward: convert from high precision to float8 with row-major memory layout
+    * backward: pass the gradient without changes
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        float8_dtype: torch.dtype,
+        linear_mm_config: LinearMMConfig,
+        gemm_input_role: GemmInputRole,
+        kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
+    ):
+        fp8_row_major, _ = triton_hp_tensor_to_float8_dynamic(
+            tensor,
+            float8_dtype,
+            linear_mm_config,
+            gemm_input_role,
+            algo=kernel_algo,
+            memory_layout=MemoryLayout.ROW_MAJOR,
+        )
+        return fp8_row_major
+
+    @staticmethod
+    def backward(ctx, g):
+        return g, None, None, None, None
+
+
+class Float8ConversionColumnMajor(torch.autograd.Function):
+    """
+    A differentiable conversion to fp8.
+    * forward: convert from high precision to float8 with column-major memory layout
+    * backward: pass the gradient without changes
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        float8_dtype: torch.dtype,
+        linear_mm_config: LinearMMConfig,
+        gemm_input_role: GemmInputRole,
+        kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
+    ):
+        _, fp8_col_major = triton_hp_tensor_to_float8_dynamic(
+            tensor,
+            float8_dtype,
+            linear_mm_config,
+            gemm_input_role,
+            algo=kernel_algo,
+            memory_layout=MemoryLayout.COL_MAJOR,
+        )
+        return fp8_col_major
+
+    @staticmethod
+    def backward(ctx, g):
+        return g, None, None, None, None
 
 
 class NoopFwToFloat8NoCompileBwDynamic(torch.autograd.Function):
@@ -114,11 +176,12 @@ class NoopFwToFloat8NoCompileBwDynamic(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, gradY):
-        fp8_tensor = triton_hp_tensor_to_float8_dynamic(
+        fp8_tensor_row_major, _ = triton_hp_tensor_to_float8_dynamic(
             gradY,
             ctx.target_dtype,
             ctx.linear_mm_config,
             GemmInputRole.GRAD_OUTPUT,
             ctx.kernel_algo,
+            memory_layout=MemoryLayout.ROW_MAJOR,
         )
-        return fp8_tensor, None, None, None
+        return fp8_tensor_row_major, None, None, None

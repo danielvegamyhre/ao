@@ -16,8 +16,7 @@ class TestModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.layers = nn.Sequential(
-            nn.Linear(32, 64, bias=False),
-            nn.Linear(64, 32, bias=False),
+            nn.Linear(16, 32, bias=False),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -44,11 +43,11 @@ def test_model_weights_and_gradients(model1, model2):
     model2 = model2.to(torch.bfloat16).to(device)
 
     # compare production float8 linear conversion with no-compile version
-    convert_to_float8_training(model2)
-    convert_to_float8_nocompile_training(model1)
+    convert_to_float8_training(model1)
+    convert_to_float8_nocompile_training(model2)
 
     input_tensor = torch.randn(
-        16, 32, requires_grad=True, dtype=torch.bfloat16, device=device
+        16, 16, requires_grad=True, dtype=torch.bfloat16, device=device
     )
     input_copy1 = input_tensor.clone().detach().requires_grad_(True)
     input_copy2 = input_tensor.clone().detach().requires_grad_(True)

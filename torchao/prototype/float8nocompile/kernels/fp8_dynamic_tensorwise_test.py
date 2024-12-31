@@ -2,6 +2,7 @@ import pytest
 import torch
 from torchao.float8.float8_scaling_utils import hp_tensor_to_float8_dynamic
 from torchao.float8.float8_tensor import LinearMMConfig
+from torchao.float8.float8_utils import is_row_major
 from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
     KernelAlgorithm,
     MemoryLayout,
@@ -17,11 +18,8 @@ from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
     "input_shape",
     [(2, 4), (32, 16), (512, 512), (4096, 4096)],
 )
-@pytest.mark.parametrize(
-    "memory_layout", [MemoryLayout.ROW_MAJOR, MemoryLayout.COL_MAJOR]
-)
 def test_fp8_triton_hp_tensor_to_float8_dynamic(
-    input_shape: tuple[int, int], algo: KernelAlgorithm, memory_layout: MemoryLayout
+    input_shape: tuple[int, int], algo: KernelAlgorithm
 ):
     assert torch.cuda.is_available()
     device = "cuda"
@@ -30,19 +28,19 @@ def test_fp8_triton_hp_tensor_to_float8_dynamic(
     y_bf16 = input_bf16.clone().detach().to(device)
 
     # production implementation
-    x_fp8 = hp_tensor_to_float8_dynamic(
+    x_fp8_row_major = hp_tensor_to_float8_dynamic(
         x_bf16,
         torch.float8_e4m3fn,
         LinearMMConfig(),
     )
+    x_fp8_col_major = x_fp8_row_major.t().contiguous().t()
 
     # float8nocompile triton implementation
-    y_fp8 = triton_hp_tensor_to_float8_dynamic(
+    y_fp8_row_major, y_fp8_col_major = triton_hp_tensor_to_float8_dynamic(
         y_bf16,
         torch.float8_e4m3fn,
         LinearMMConfig(),
         algo=algo,
-        memory_layout=memory_layout,
     )
 
     def allclose_fp8(tensor1, tensor2, atol=1e-3, rtol=1e-3):
@@ -57,14 +55,45 @@ def test_fp8_triton_hp_tensor_to_float8_dynamic(
         tensor2_fp32 = tensor2.to(torch.float32)
         return torch.allclose(tensor1_fp32, tensor2_fp32, atol=atol, rtol=rtol)
 
-    # for column major output, compare against torch equivalent of transformation
-    # to column major
-    if memory_layout == MemoryLayout.COL_MAJOR:
-        x_fp8 = x_fp8.t().contiguous().t()
+    # check scales
+    assert torch.allclose(
+        x_fp8_row_major._scale, y_fp8_row_major._scale, atol=1e-3, rtol=1e-3
+    )
+    assert torch.allclose(
+        x_fp8_col_major._scale, y_fp8_col_major._scale, atol=1e-3, rtol=1e-3
+    )
 
-    # assert that the two implementations are equivalent
-    assert torch.allclose(x_fp8._scale, y_fp8._scale, atol=1e-3, rtol=1e-3)
-    assert allclose_fp8(x_fp8._data, y_fp8._data, atol=1e-3, rtol=1e-3)
+    # check data
+    assert allclose_fp8(
+        x_fp8_row_major._data, y_fp8_row_major._data, atol=1e-3, rtol=1e-3
+    )
+    assert allclose_fp8(
+        x_fp8_col_major._data, y_fp8_col_major._data, atol=1e-3, rtol=1e-3
+    )
+
+    # check shapes
+    assert x_fp8_row_major.shape == y_fp8_row_major.shape
+    assert x_fp8_col_major.shape == y_fp8_col_major.shape
+
+    # check strides
+    assert x_fp8_row_major.stride() == y_fp8_row_major.stride()
+    assert x_fp8_col_major.stride() == y_fp8_col_major.stride()
+
+    # check memory layout
+    assert is_row_major(x_fp8_row_major.stride())
+    assert is_row_major(y_fp8_row_major.stride())
+    assert not is_row_major(x_fp8_col_major.stride())
+    assert not is_row_major(y_fp8_col_major.stride())
+
+    # check underlying memory layout
+    assert (
+        x_fp8_row_major._data.storage().tolist()
+        == y_fp8_row_major._data.storage().tolist()
+    )
+    assert (
+        x_fp8_col_major._data.storage().tolist()
+        == y_fp8_col_major._data.storage().tolist()
+    )
 
     # assert that error is raised when input tensor is not contiguous
     with pytest.raises(AssertionError, match="tensor must be contiguous"):

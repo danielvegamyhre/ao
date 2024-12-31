@@ -7,6 +7,7 @@
 A simple module swap UX for a float8 version of `torch.nn.Linear` which
 does not require `torch.compile` to be performant.
 """
+import pdb
 from typing import Optional
 
 import torch
@@ -19,11 +20,14 @@ from torchao.float8.float8_tensor import GemmInputRole, LinearMMConfig, ScaledMM
 from torchao.float8.float8_utils import tensor_to_scale
 
 from torchao.prototype.float8nocompile.float8nocompile_scaling_utils import (
-    Float8NoCompileConversionFunc,
+    Float8Conversion,
+    Float8ConversionColumnMajor,
+    Float8ConversionRowMajor,
     NoopFwToFloat8NoCompileBwDynamic,
 )
 from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
     KernelAlgorithm,
+    MemoryLayout,
 )
 
 
@@ -74,25 +78,7 @@ class Float8LinearNoCompile(torch.nn.Linear):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         # TODO(danielvegamyhre): support for FSDP once dependencies are implemented
-        input_fp8 = self.cast_input_to_float8(input)
-        weight_fp8_t = self.cast_weight_to_float8_t(self.weight)
-
-        # compute fp8 matmul
-        output = manual_float8_matmul_with_args_in_float8.apply(input_fp8, weight_fp8_t)
-
-        # cast grad_output to float8_e5m2 during backward
-        return self.cast_output_to_float8_in_bw(output)
-
-    def cast_input_to_float8(self, input: torch.Tensor) -> torch.Tensor:
-        # Duplicate the autocast logic for F.linear, so that the output
-        # of our module has the right original precision
-        if torch.is_autocast_enabled():
-            # For now, hardcode to GPU's autocast dtype
-            # if we need CPU support in the future, we can add it
-            autocast_dtype = torch.get_autocast_gpu_dtype()
-            input = input.to(autocast_dtype)
-
-        return Float8NoCompileConversionFunc.apply(
+        input_fp8_row_major = Float8ConversionRowMajor.apply(
             input,
             self.config.cast_config_input.target_dtype,
             self.linear_mm_config,
@@ -100,27 +86,34 @@ class Float8LinearNoCompile(torch.nn.Linear):
             self.kernel_algo,
         )
 
-    def cast_weight_to_float8_t(
-        self,
-        weight: torch.Tensor,
-    ) -> torch.Tensor:
-        weight_fp8 = Float8NoCompileConversionFunc.apply(
-            weight,
+        weight_t_fp8_col_major = Float8ConversionColumnMajor.apply(
+            self.weight.t().contiguous(),  # contiguous inputs required for triton kernels
             self.config.cast_config_weight.target_dtype,
             self.linear_mm_config,
             GemmInputRole.WEIGHT,
             self.kernel_algo,
         )
-        return weight_fp8.t()
 
-    def cast_output_to_float8_in_bw(self, output: torch.Tensor) -> torch.Tensor:
-        # casts grad_output to float8_e5m2 for backward
-        return NoopFwToFloat8NoCompileBwDynamic.apply(
+        # output = matmul_with_args_in_hp.apply(
+        #     input,
+        #     self.weight.t(),
+        #     self.config,
+        #     self.linear_mm_config,
+        #     self.kernel_algo,
+        # )
+        output = matmul_with_args_in_fp8.apply(
+            input_fp8_row_major,
+            weight_t_fp8_col_major,
+        )
+
+        # cast grad_output to float8_e5m2 during backward
+        output = NoopFwToFloat8NoCompileBwDynamic.apply(
             output,
             self.config.cast_config_grad_output.target_dtype,
             self.linear_mm_config,
             self.kernel_algo,
         )
+        return output
 
     @classmethod
     def from_float(cls, mod, kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX):
@@ -145,3 +138,86 @@ class Float8LinearNoCompile(torch.nn.Linear):
 
         # TODO(danielvegamyhre): support for FSDP once dependencies are implemented
         return new_mod
+
+
+class matmul_with_args_in_fp8(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        input_fp8_row_major,
+        weight_t_fp8_col_major,
+    ):
+        ctx.save_for_backward(input_fp8_row_major, weight_t_fp8_col_major)
+        output = torch.mm(input_fp8_row_major, weight_t_fp8_col_major)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input_fp8_row_major, weight_t_fp8_col_major = ctx.saved_tensors
+
+        # grad_input = grad_output @ weight (backward pass)
+        grad_input = torch.mm(
+            grad_output,
+            weight_t_fp8_col_major.t(),
+        )
+
+        # grad_weight = input_t @ grad_output (backward pass)
+        grad_weight = torch.mm(grad_output.t(), input_fp8_row_major)
+        return grad_input, grad_weight.t()
+
+
+class matmul_with_args_in_hp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_hp, weight_t_hp, config, linear_mm_config, kernel_algo):
+        ctx.save_for_backward(input_hp, weight_t_hp)
+        ctx.config = config
+        ctx.linear_mm_config = linear_mm_config
+        ctx.kernel_algo = kernel_algo
+
+        # input @ weight_t = output (forward pass)
+        input_fp8_row_major = Float8ConversionRowMajor.apply(
+            input_hp,
+            config.cast_config_input.target_dtype,
+            linear_mm_config,
+            GemmInputRole.INPUT,
+            kernel_algo,
+        )
+
+        weight_t_fp8_col_major = Float8ConversionColumnMajor.apply(
+            weight_t_hp.contiguous(),  # triton kernel requires input tensor be contiguous
+            config.cast_config_weight.target_dtype,
+            linear_mm_config,
+            GemmInputRole.WEIGHT,
+            kernel_algo,
+        )
+
+        output = torch.mm(input_fp8_row_major, weight_t_fp8_col_major)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # grad output is already e5m2
+        input_hp, weight_t_hp = ctx.saved_tensors
+
+        # 1. grad_input = grad_output @ weight (backward pass)
+        weight_fp8_col_major = Float8ConversionColumnMajor.apply(
+            weight_t_hp.t().contiguous(),  # triton kernel requires input tensor be contiguous
+            ctx.config.cast_config_weight.target_dtype,
+            ctx.linear_mm_config,
+            GemmInputRole.WEIGHT,
+            ctx.kernel_algo,
+        )
+        grad_input = torch.mm(grad_output, weight_fp8_col_major)
+
+        # 2. grad_weight = input_t @ grad_output (backward pass)
+        # TODO: find out why float8_linear.py uses grad_weight = grad_output_t @ input
+        input_fp8_col_major = Float8ConversionColumnMajor.apply(
+            input_hp,
+            ctx.config.cast_config_input.target_dtype,
+            ctx.linear_mm_config,
+            GemmInputRole.INPUT,
+            ctx.kernel_algo,
+        )
+
+        grad_weight = torch.mm(grad_output.t(), input_fp8_col_major)
+        return grad_input, grad_weight.t(), None, None, None
