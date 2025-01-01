@@ -64,9 +64,6 @@ def test_model_weights_and_gradients(model1, model2):
     loss2.backward()
 
     # compare the outputs, weight gradients, and input gradients
-    import pdb
-
-    pdb.set_trace()
     assert torch.allclose(output1, output2, atol=0, rtol=0)
     assert torch.allclose(input_copy1.grad, input_copy2.grad, atol=0, rtol=0)
     for param1, param2 in zip(model1.parameters(), model2.parameters()):
