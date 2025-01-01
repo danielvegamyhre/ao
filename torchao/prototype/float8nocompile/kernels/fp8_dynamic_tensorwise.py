@@ -234,18 +234,44 @@ def triton_hp_tensor_to_float8_dynamic(
     memory_layout: MemoryLayout = MemoryLayout.ROW_MAJOR,
 ) -> Float8Tensor:
 
-    num_elements = hp_tensor.numel()
-    orig_shape = hp_tensor.shape
-
     tl_input_dtype = FP8_DTYPE_MAP[hp_tensor.dtype]
     tl_output_dtype = FP8_DTYPE_MAP[fp8_dtype]
 
     fp8_dtype_min = torch.finfo(fp8_dtype).min
     fp8_dtype_max = torch.finfo(fp8_dtype).max
 
-    # allocate memory for computed scale, local block maxes, and output fp8 tensor
-    scale_out = torch.empty((1,), dtype=torch.float32, device=hp_tensor.device)
+    # compute scaling factor for tensor
+    scale = _triton_hp_tensor_to_scale(
+        hp_tensor,
+        tl_input_dtype,
+        fp8_dtype_max,
+        algo,
+    )
 
+    # perform fp8 conversion
+    fp8_tensor_row_major, fp8_tensor_col_major = _triton_hp_tensor_and_scale_to_fp8(
+        hp_tensor,
+        scale,
+        fp8_dtype,
+        fp8_dtype_min,
+        fp8_dtype_max,
+        tl_input_dtype,
+        tl_output_dtype,
+        linear_mm_config,
+        gemm_input_role,
+        memory_layout,
+    )
+    return fp8_tensor_row_major, fp8_tensor_col_major
+
+
+def _triton_hp_tensor_to_scale(
+    hp_tensor: torch.Tensor,
+    tl_input_dtype: tl.core.dtype,
+    fp8_dtype_max: float,
+    algo: KernelAlgorithm,
+):
+    num_elements = hp_tensor.numel()
+    scale_out = torch.empty((1,), dtype=torch.float32, device=hp_tensor.device)
     grid = lambda meta: (triton.cdiv(num_elements, meta["BLOCK_SIZE"]),)
 
     # compute the fp8 scale using the given algorithm
@@ -299,6 +325,23 @@ def triton_hp_tensor_to_float8_dynamic(
     else:
         raise ValueError(f"Unsupported kernel algorithm: {algo}")
 
+    return scale_out
+
+
+def _triton_hp_tensor_and_scale_to_fp8(
+    hp_tensor: torch.Tensor,
+    scale: torch.Tensor,
+    fp8_dtype: torch.dtype,
+    fp8_dtype_min: float,
+    fp8_dtype_max: float,
+    tl_input_dtype: tl.core.dtype,
+    tl_output_dtype: tl.core.dtype,
+    linear_mm_config: LinearMMConfig,
+    gemm_input_role: GemmInputRole,
+    memory_layout: MemoryLayout,
+):
+    orig_shape = hp_tensor.shape
+    num_elements = hp_tensor.numel()
     fp8_tensor_row_major = None
     fp8_tensor_col_major = None
 
@@ -307,10 +350,11 @@ def triton_hp_tensor_to_float8_dynamic(
         fp8_output_row_major = torch.empty(
             orig_shape, dtype=fp8_dtype, device=hp_tensor.device
         )
+        grid = lambda meta: (triton.cdiv(num_elements, meta["BLOCK_SIZE"]),)
         # launch triton kernel to perform conversion
         _to_fp8_row_major[grid](
             hp_tensor,
-            scale_out,
+            scale,
             fp8_output_row_major,
             num_elements,
             fp8_dtype_min,
@@ -322,7 +366,7 @@ def triton_hp_tensor_to_float8_dynamic(
         # wrap in Float8Tensor
         fp8_tensor_row_major = Float8Tensor(
             fp8_output_row_major,
-            scale_out,
+            scale,
             orig_dtype=hp_tensor.dtype,
             linear_mm_config=linear_mm_config,
             gemm_input_role=gemm_input_role,
@@ -341,7 +385,7 @@ def triton_hp_tensor_to_float8_dynamic(
         # launch triton kernel to perform conversion
         _to_fp8_col_major[grid](
             hp_tensor,
-            scale_out,
+            scale,
             fp8_output_col_major,
             num_elements,
             fp8_dtype_min,
@@ -362,9 +406,10 @@ def triton_hp_tensor_to_float8_dynamic(
         # wrap in Float8Tensor
         fp8_tensor_col_major = Float8Tensor(
             fp8_output_col_major,
-            scale_out,
+            scale,
             orig_dtype=hp_tensor.dtype,
             linear_mm_config=linear_mm_config,
             gemm_input_role=gemm_input_role,
         )
+
     return fp8_tensor_row_major, fp8_tensor_col_major

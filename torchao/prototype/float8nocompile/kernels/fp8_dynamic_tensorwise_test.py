@@ -41,6 +41,7 @@ def test_fp8_triton_hp_tensor_to_float8_dynamic(
         torch.float8_e4m3fn,
         LinearMMConfig(),
         algo=algo,
+        memory_layout=MemoryLayout.ROW_AND_COL_MAJOR,
     )
 
     def allclose_fp8(tensor1, tensor2, atol=1e-3, rtol=1e-3):
