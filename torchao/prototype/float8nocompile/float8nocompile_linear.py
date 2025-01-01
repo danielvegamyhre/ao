@@ -105,9 +105,6 @@ class Float8LinearNoCompile(torch.nn.Linear):
             input_fp8_row_major,
             weight_t_fp8_col_major,
         )
-        import pdb
-
-        pdb.set_trace()
 
         # cast grad_output to float8_e5m2 during backward
         output = NoopFwToFloat8NoCompileBwDynamic.apply(

@@ -71,6 +71,7 @@ def hp_to_fp8_row_major(
     gemm_input_role: GemmInputRole = GemmInputRole.INPUT,
     algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
 ) -> Float8Tensor:
+    assert hp_tensor.is_contiguous(), "input tensor must be contiguous"
 
     num_elements = hp_tensor.numel()
     tl_input_dtype = FP8_DTYPE_MAP[hp_tensor.dtype]
@@ -120,6 +121,7 @@ def hp_to_fp8_col_major(
     gemm_input_role: GemmInputRole = GemmInputRole.INPUT,
     algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
 ) -> Float8Tensor:
+    assert hp_tensor.is_contiguous(), "input tensor must be contiguous"
 
     num_elements = hp_tensor.numel()
     num_rows, num_cols = hp_tensor.shape
@@ -175,6 +177,7 @@ def hp_to_fp8_row_and_col_major(
     gemm_input_role: GemmInputRole = GemmInputRole.INPUT,
     algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
 ) -> Float8Tensor:
+    assert hp_tensor.is_contiguous(), "input tensor must be contiguous"
 
     tl_input_dtype = FP8_DTYPE_MAP[hp_tensor.dtype]
     tl_output_dtype = FP8_DTYPE_MAP[fp8_dtype]
