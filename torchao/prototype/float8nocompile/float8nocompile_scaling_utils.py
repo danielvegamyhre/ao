@@ -17,9 +17,11 @@ from torchao.float8.float8_tensor import (
     LinearMMConfig,
 )
 from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
+    hp_to_fp8_col_major,
+    hp_to_fp8_row_and_col_major,
+    hp_to_fp8_row_major,
     KernelAlgorithm,
     MemoryLayout,
-    triton_hp_tensor_to_float8_dynamic,
 )
 
 # avoid division by zero when calculating scale
@@ -77,13 +79,12 @@ class Float8Conversion(torch.autograd.Function):
         gemm_input_role: GemmInputRole,
         kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
     ):
-        fp8_row_major, fp8_col_major = triton_hp_tensor_to_float8_dynamic(
+        fp8_row_major, fp8_col_major = hp_to_fp8_row_and_col_major(
             tensor,
             float8_dtype,
             linear_mm_config,
             gemm_input_role,
             algo=kernel_algo,
-            memory_layout=MemoryLayout.ROW_AND_COL_MAJOR,
         )
         return fp8_row_major, fp8_col_major
 
@@ -108,13 +109,12 @@ class Float8ConversionRowMajor(torch.autograd.Function):
         gemm_input_role: GemmInputRole,
         kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
     ):
-        fp8_row_major, _ = triton_hp_tensor_to_float8_dynamic(
+        fp8_row_major = hp_to_fp8_row_major(
             tensor,
             float8_dtype,
             linear_mm_config,
             gemm_input_role,
             algo=kernel_algo,
-            memory_layout=MemoryLayout.ROW_MAJOR,
         )
         return fp8_row_major
 
@@ -139,13 +139,12 @@ class Float8ConversionColumnMajor(torch.autograd.Function):
         gemm_input_role: GemmInputRole,
         kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
     ):
-        _, fp8_col_major = triton_hp_tensor_to_float8_dynamic(
+        fp8_col_major = hp_to_fp8_col_major(
             tensor,
             float8_dtype,
             linear_mm_config,
             gemm_input_role,
             algo=kernel_algo,
-            memory_layout=MemoryLayout.COL_MAJOR,
         )
         return fp8_col_major
 
@@ -176,12 +175,11 @@ class NoopFwToFloat8NoCompileBwDynamic(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, gradY):
-        fp8_tensor_row_major, _ = triton_hp_tensor_to_float8_dynamic(
+        fp8_tensor_row_major = hp_to_fp8_row_major(
             gradY,
             ctx.target_dtype,
             ctx.linear_mm_config,
             GemmInputRole.GRAD_OUTPUT,
             ctx.kernel_algo,
-            memory_layout=MemoryLayout.ROW_MAJOR,
         )
         return fp8_tensor_row_major, None, None, None

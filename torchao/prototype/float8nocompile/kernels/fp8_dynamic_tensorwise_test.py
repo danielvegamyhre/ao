@@ -4,9 +4,9 @@ from torchao.float8.float8_scaling_utils import hp_tensor_to_float8_dynamic
 from torchao.float8.float8_tensor import LinearMMConfig
 from torchao.float8.float8_utils import is_row_major
 from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
+    hp_to_fp8_row_and_col_major,
     KernelAlgorithm,
     MemoryLayout,
-    triton_hp_tensor_to_float8_dynamic,
 )
 
 
@@ -18,7 +18,7 @@ from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
     "input_shape",
     [(2, 4), (32, 16), (512, 512), (4096, 4096)],
 )
-def test_fp8_triton_hp_tensor_to_float8_dynamic(
+def test_fp8_hp_to_fp8_row_and_col_major(
     input_shape: tuple[int, int], algo: KernelAlgorithm
 ):
     assert torch.cuda.is_available()
@@ -36,12 +36,11 @@ def test_fp8_triton_hp_tensor_to_float8_dynamic(
     x_fp8_col_major = x_fp8_row_major.t().contiguous().t()
 
     # float8nocompile triton implementation
-    y_fp8_row_major, y_fp8_col_major = triton_hp_tensor_to_float8_dynamic(
+    y_fp8_row_major, y_fp8_col_major = hp_to_fp8_row_and_col_major(
         y_bf16,
         torch.float8_e4m3fn,
         LinearMMConfig(),
         algo=algo,
-        memory_layout=MemoryLayout.ROW_AND_COL_MAJOR,
     )
 
     def allclose_fp8(tensor1, tensor2, atol=1e-3, rtol=1e-3):
@@ -98,7 +97,7 @@ def test_fp8_triton_hp_tensor_to_float8_dynamic(
 
     # assert that error is raised when input tensor is not contiguous
     with pytest.raises(AssertionError, match="tensor must be contiguous"):
-        triton_hp_tensor_to_float8_dynamic(
+        hp_to_fp8_row_and_col_major(
             y_bf16.t(),  # transpose so tensor memory layout is no longer contiguous
             torch.float8_e4m3fn,
             LinearMMConfig(),
