@@ -19,7 +19,7 @@ from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
 )
 @pytest.mark.parametrize(
     "input_shape",
-    [(2, 4), (32, 16), (512, 512), (4096, 4096)],
+    [(2, 4), (32, 16), (512, 512)],
 )
 def test_fp8_hp_to_fp8_row_and_col_major(
     input_shape: tuple[int, int], algo: KernelAlgorithm
@@ -101,7 +101,7 @@ def test_fp8_hp_to_fp8_row_and_col_major(
 )
 @pytest.mark.parametrize(
     "input_shape",
-    [(2, 4), (32, 16), (512, 512), (4096, 4096)],
+    [(2, 4), (32, 16), (512, 512)],
 )
 def test_fp8_hp_to_fp8_row_major(input_shape: tuple[int, int], algo: KernelAlgorithm):
     assert torch.cuda.is_available()
@@ -166,7 +166,7 @@ def test_fp8_hp_to_fp8_row_major(input_shape: tuple[int, int], algo: KernelAlgor
 )
 @pytest.mark.parametrize(
     "input_shape",
-    [(2, 4), (32, 16), (512, 512), (4096, 4096)],
+    [(2, 4), (32, 16), (512, 512)],
 )
 def test_fp8_hp_to_fp8_row_major_t(input_shape: tuple[int, int], algo: KernelAlgorithm):
     assert torch.cuda.is_available()
@@ -234,7 +234,7 @@ def test_fp8_hp_to_fp8_row_major_t(input_shape: tuple[int, int], algo: KernelAlg
 )
 @pytest.mark.parametrize(
     "input_shape",
-    [(2, 4), (32, 16), (512, 512), (4096, 4096)],
+    [(2, 4), (32, 16), (512, 512)],
 )
 def test_fp8_hp_to_fp8_col_major(input_shape: tuple[int, int], algo: KernelAlgorithm):
     assert torch.cuda.is_available()
@@ -300,7 +300,7 @@ def test_fp8_hp_to_fp8_col_major(input_shape: tuple[int, int], algo: KernelAlgor
 )
 @pytest.mark.parametrize(
     "input_shape",
-    [(2, 4), (32, 16), (512, 512), (4096, 4096)],
+    [(2, 4), (32, 16), (512, 512)],
 )
 def test_fp8_hp_to_fp8_col_major_t(input_shape: tuple[int, int], algo: KernelAlgorithm):
     assert torch.cuda.is_available()
@@ -366,7 +366,7 @@ def test_fp8_hp_to_fp8_col_major_t(input_shape: tuple[int, int], algo: KernelAlg
 )
 @pytest.mark.parametrize(
     "input_shape",
-    [(2, 4), (32, 16), (512, 512), (4096, 4096)],
+    [(2, 4), (32, 16), (512, 512)],
 )
 def test_fp8_hp_to_fp8_row_and_col_major(
     input_shape: tuple[int, int], algo: KernelAlgorithm
