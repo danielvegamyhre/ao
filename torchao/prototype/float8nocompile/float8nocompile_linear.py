@@ -29,7 +29,6 @@ from torchao.prototype.float8nocompile.float8nocompile_scaling_utils import (
 )
 from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
     KernelAlgorithm,
-    MemoryLayout,
 )
 
 

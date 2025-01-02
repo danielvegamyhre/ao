@@ -57,19 +57,6 @@ class KernelAlgorithm(Enum):
     REDUCTION = "reduction"
 
 
-class MemoryLayout(Enum):
-    """Enum for memory layout of input tensor."""
-
-    # return 1 output tensor with row-major memory layout
-    ROW_MAJOR = "row_major"
-
-    # return 1 output tensor with column-major memory layout
-    COL_MAJOR = "col_major"
-
-    # return 2 output tensors, one with row-major and the other with column-major memory layout
-    ROW_AND_COL_MAJOR = "row_and_col_major"
-
-
 @triton.autotune(configs=kernel_configs_1D, key=["num_elements"])
 @triton.jit
 def to_fp8_row_major(
