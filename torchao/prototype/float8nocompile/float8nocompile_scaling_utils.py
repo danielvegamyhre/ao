@@ -18,52 +18,16 @@ from torchao.float8.float8_tensor import (
 )
 from torchao.prototype.float8nocompile.kernels.fp8_dynamic_tensorwise import (
     hp_to_fp8_col_major,
+    hp_to_fp8_col_major_t,
     hp_to_fp8_row_and_col_major,
     hp_to_fp8_row_major,
+    hp_to_fp8_row_major_t,
     KernelAlgorithm,
     MemoryLayout,
 )
 
-# avoid division by zero when calculating scale
-# TODO: align this value with NVIDIA's assumptions (current value is a guess)
-EPS = 1e-12
 
-
-def hp_tensor_to_float8nocompile_dynamic(
-    hp_tensor: torch.Tensor,
-    float8_dtype: torch.dtype,
-    linear_mm_config: LinearMMConfig,
-    gemm_input_role: GemmInputRole = GemmInputRole.INPUT,
-) -> Float8Tensor:
-    """
-    Given a high precision tensor `hp_tensor`,
-    scales `hp_tensor` dynamically and returns a `Float8Tensor` of the result.
-
-    Args:
-        hp_tensor: the tensor to convert
-        float8_dtype: the float8 dtype to use
-        linear_mm_config: Defines the configuration for the scaled_mm for
-          the 3 fwd/bwd gemms of linear
-        gemm_input_role: Defines the role of this tensor (input, weight or grad_output) in
-          the 3 fwd/bwd gemms of linear
-    """
-    # TODO(danielvegamyhre): replace this torch implementation with custom triton kernel
-    # torch.compile and eager show different numerics for 1.0 / float32,
-    # upcast to float64 to ensure same numeric between compile and eager
-    amax = torch.max(torch.abs(hp_tensor)).to(torch.float64)
-    scale = torch.finfo(float8_dtype).max / torch.clamp(amax, min=EPS)
-    scale = scale.to(torch.float32)  # scale must be fp32
-    return _ToFloat8ConstrFunc.apply(
-        hp_tensor,
-        scale,
-        float8_dtype,
-        linear_mm_config,
-        gemm_input_role,
-        None,
-    )
-
-
-class Float8Conversion(torch.autograd.Function):
+class ToFP8RowAndColumnMajor(torch.autograd.Function):
     """
     A differentiable conversion to fp8.
     * forward: convert from high precision to float8 and produces both row-major and column-major outputs
@@ -93,9 +57,9 @@ class Float8Conversion(torch.autograd.Function):
         return g, None, None, None, None
 
 
-class Float8ConversionRowMajor(torch.autograd.Function):
+class ToFP8RowMajor(torch.autograd.Function):
     """
-    A differentiable conversion to fp8.
+    A differentiable conversion to fp8 in row-major layout.
     * forward: convert from high precision to float8 with row-major memory layout
     * backward: pass the gradient without changes
     """
@@ -123,9 +87,39 @@ class Float8ConversionRowMajor(torch.autograd.Function):
         return g, None, None, None, None
 
 
-class Float8ConversionColumnMajor(torch.autograd.Function):
+class ToFP8RowMajorT(torch.autograd.Function):
     """
-    A differentiable conversion to fp8.
+    A differentiable conversion to fp8 with transposed dimensions in row-major layout.
+    * forward: convert from high precision to float8 with transposed dimensions with row-major memory layout
+    * backward: pass the gradient without changes
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        float8_dtype: torch.dtype,
+        linear_mm_config: LinearMMConfig,
+        gemm_input_role: GemmInputRole,
+        kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
+    ):
+        fp8_row_major_t = hp_to_fp8_row_major_t(
+            tensor,
+            float8_dtype,
+            linear_mm_config,
+            gemm_input_role,
+            algo=kernel_algo,
+        )
+        return fp8_row_major_t
+
+    @staticmethod
+    def backward(ctx, g):
+        return g, None, None, None, None
+
+
+class ToFP8ColumnMajor(torch.autograd.Function):
+    """
+    A differentiable conversion to fp8 in column-major layout.
     * forward: convert from high precision to float8 with column-major memory layout
     * backward: pass the gradient without changes
     """
@@ -147,6 +141,36 @@ class Float8ConversionColumnMajor(torch.autograd.Function):
             algo=kernel_algo,
         )
         return fp8_col_major
+
+    @staticmethod
+    def backward(ctx, g):
+        return g, None, None, None, None
+
+
+class ToFP8ColumnMajorT(torch.autograd.Function):
+    """
+    A differentiable conversion to fp8 with transposed dimensions in column-major layout.
+    * forward: convert from high precision to float8 with transposed dimensions in column-major memory layout.
+    * backward: pass the gradient without changes
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        float8_dtype: torch.dtype,
+        linear_mm_config: LinearMMConfig,
+        gemm_input_role: GemmInputRole,
+        kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
+    ):
+        fp8_col_major_t = hp_to_fp8_col_major_t(
+            tensor,
+            float8_dtype,
+            linear_mm_config,
+            gemm_input_role,
+            algo=kernel_algo,
+        )
+        return fp8_col_major_t
 
     @staticmethod
     def backward(ctx, g):

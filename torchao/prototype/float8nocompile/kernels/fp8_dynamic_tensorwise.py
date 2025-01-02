@@ -55,11 +55,11 @@ class MemoryLayout(Enum):
 
 
 kernel_configs = [
-    # triton.Config({"BLOCK_SIZE": 128}, num_warps=1),
+    triton.Config({"BLOCK_SIZE": 128}, num_warps=1),
     # triton.Config({"BLOCK_SIZE": 256}, num_warps=2),
     # triton.Config({"BLOCK_SIZE": 512}, num_warps=4),
     # triton.Config({"BLOCK_SIZE": 1024}, num_warps=4),
-    triton.Config({"BLOCK_SIZE": 2048}, num_warps=8),
+    # triton.Config({"BLOCK_SIZE": 2048}, num_warps=8),
 ]
 
 
@@ -475,9 +475,9 @@ def _to_fp8_row_major(
 
 @triton.autotune(
     configs=[
-        # triton.Config({"BLOCK_SIZE_ROWS": 128, "BLOCK_SIZE_COLS": 128}, num_warps=1),
+        triton.Config({"BLOCK_SIZE_ROWS": 128, "BLOCK_SIZE_COLS": 128}, num_warps=1),
         # triton.Config({"BLOCK_SIZE_ROWS": 256, "BLOCK_SIZE_COLS": 256}, num_warps=2),
-        triton.Config({"BLOCK_SIZE_ROWS": 8, "BLOCK_SIZE_COLS": 8}, num_warps=4),
+        # triton.Config({"BLOCK_SIZE_ROWS": 512, "BLOCK_SIZE_COLS": 512}, num_warps=4),
     ],
     key=["num_elements"],
 )
@@ -549,9 +549,9 @@ def _to_fp8_row_major_t(
 
 @triton.autotune(
     configs=[
-        # triton.Config({"BLOCK_SIZE_ROWS": 128, "BLOCK_SIZE_COLS": 128}, num_warps=1),
+        triton.Config({"BLOCK_SIZE_ROWS": 128, "BLOCK_SIZE_COLS": 128}, num_warps=1),
         # triton.Config({"BLOCK_SIZE_ROWS": 256, "BLOCK_SIZE_COLS": 256}, num_warps=2),
-        triton.Config({"BLOCK_SIZE_ROWS": 512, "BLOCK_SIZE_COLS": 512}, num_warps=4),
+        # triton.Config({"BLOCK_SIZE_ROWS": 512, "BLOCK_SIZE_COLS": 512}, num_warps=4),
     ],
     key=["num_elements"],
 )
@@ -669,9 +669,9 @@ def _to_fp8_col_major_t(
 
 @triton.autotune(
     configs=[
-        # triton.Config({"BLOCK_SIZE_ROWS": 128, "BLOCK_SIZE_COLS": 128}, num_warps=1),
+        triton.Config({"BLOCK_SIZE_ROWS": 128, "BLOCK_SIZE_COLS": 128}, num_warps=1),
         # triton.Config({"BLOCK_SIZE_ROWS": 256, "BLOCK_SIZE_COLS": 256}, num_warps=2),
-        triton.Config({"BLOCK_SIZE_ROWS": 512, "BLOCK_SIZE_COLS": 512}, num_warps=4),
+        # triton.Config({"BLOCK_SIZE_ROWS": 512, "BLOCK_SIZE_COLS": 512}, num_warps=4),
     ],
     key=["num_elements"],
 )
