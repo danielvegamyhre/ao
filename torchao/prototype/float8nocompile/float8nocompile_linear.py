@@ -80,26 +80,6 @@ class Float8LinearNoCompile(torch.nn.Linear):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         # TODO(danielvegamyhre): support for FSDP once dependencies are implemented
-        # input_fp8_row_major = ToFP8RowMajor.apply(
-        #     input,
-        #     self.config.cast_config_input.target_dtype,
-        #     self.linear_mm_config,
-        #     GemmInputRole.INPUT,
-        #     self.kernel_algo,
-        # )
-
-        # weight_t_fp8_col_major = ToFP8ColumnMajorT.apply(
-        #     self.weight,
-        #     self.config.cast_config_weight.target_dtype,
-        #     self.linear_mm_config,
-        #     GemmInputRole.WEIGHT,
-        #     self.kernel_algo,
-        # )
-        # output = matmul_with_args_in_fp8.apply(
-        #     input_fp8_row_major,
-        #     weight_t_fp8_col_major,
-        # )
-
         output = matmul_with_args_in_hp.apply(
             input,
             self.weight,
@@ -107,14 +87,6 @@ class Float8LinearNoCompile(torch.nn.Linear):
             self.linear_mm_config,
             self.kernel_algo,
         )
-
-        # cast grad_output to float8_e5m2 during backward
-        # output = NoopFwToFloat8NoCompileBwDynamic.apply(
-        #     output,
-        #     self.config.cast_config_grad_output.target_dtype,
-        #     self.linear_mm_config,
-        #     self.kernel_algo,
-        # )
         return output
 
     @classmethod
@@ -200,7 +172,7 @@ class matmul_with_args_in_hp(torch.autograd.Function):
     def backward(ctx, grad_output):
         input_fp8_col_major, weight_hp = ctx.saved_tensors
 
-        # TODO: grad output is already e5m2
+        # cast grad output to float8_e5m2 for backward
         grad_output_fp8_row_major = ToFP8RowMajor.apply(
             grad_output,
             ctx.config.cast_config_grad_output.target_dtype,
