@@ -163,7 +163,7 @@ def test_fp8_hp_to_fp8_row_major(input_shape: tuple[int, int], algo: KernelAlgor
 
 @pytest.mark.parametrize(
     "algo",
-    [KernelAlgorithm.ATOMIC_MAX],  # add reduction kernel
+    [KernelAlgorithm.REDUCTION, KernelAlgorithm.ATOMIC_MAX],
 )
 @pytest.mark.parametrize(
     "input_shape",
@@ -328,28 +328,28 @@ def test_fp8_hp_to_fp8_col_major_t(input_shape: tuple[int, int], algo: KernelAlg
 
     # check scales
     assert torch.allclose(
-        x_fp8_col_major._scale, y_fp8_col_major._scale, atol=1e-3, rtol=1e-3
+        x_fp8_col_major_t._scale, y_fp8_col_major_t._scale, atol=1e-3, rtol=1e-3
     )
 
     # check data
     assert allclose_fp8(
-        x_fp8_col_major._data, y_fp8_col_major._data, atol=1e-3, rtol=1e-3
+        x_fp8_col_major_t._data, y_fp8_col_major_t._data, atol=1e-3, rtol=1e-3
     )
 
     # check shapes
-    assert x_fp8_col_major.shape == y_fp8_col_major.shape
+    assert x_fp8_col_major_t.shape == y_fp8_col_major_t.shape
 
     # check strides
-    assert x_fp8_col_major.stride() == y_fp8_col_major.stride()
+    assert x_fp8_col_major_t.stride() == y_fp8_col_major_t.stride()
 
     # check memory layout
-    assert not is_row_major(x_fp8_col_major.stride())
-    assert not is_row_major(y_fp8_col_major.stride())
+    assert not is_row_major(x_fp8_col_major_t.stride())
+    assert not is_row_major(y_fp8_col_major_t.stride())
 
     # check underlying memory layout
     assert (
-        x_fp8_col_major._data.storage().tolist()
-        == y_fp8_col_major._data.storage().tolist()
+        x_fp8_col_major_t._data.storage().tolist()
+        == y_fp8_col_major_t._data.storage().tolist()
     )
 
     # assert that error is raised when input tensor is not contiguous
