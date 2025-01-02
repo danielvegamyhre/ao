@@ -59,7 +59,7 @@ class KernelAlgorithm(Enum):
 
 @triton.autotune(configs=kernel_configs_1D, key=["num_elements"])
 @triton.jit
-def to_fp8_row_major(
+def _to_fp8_row_major(
     input_ptr,
     out_ptr,
     scale_ptr,
@@ -93,7 +93,7 @@ def to_fp8_row_major(
     key=["num_elements"],
 )
 @triton.jit
-def to_fp8_row_major_t(
+def _to_fp8_row_major_t(
     input_ptr,
     out_ptr,
     scale_ptr,
@@ -123,13 +123,8 @@ def to_fp8_row_major_t(
     # load block of input tensor
     block_row_start = block_row_id * BLOCK_SIZE_ROWS
     block_col_start = block_col_id * BLOCK_SIZE_COLS
-
-    row_offs = tl.arange(0, BLOCK_SIZE_ROWS)
-    col_offs = tl.arange(0, BLOCK_SIZE_COLS)
-
-    block_row_offs = block_row_start + row_offs
-    block_col_offs = block_col_start + col_offs
-
+    block_row_offs = block_row_start + tl.arange(0, BLOCK_SIZE_ROWS)
+    block_col_offs = block_col_start + tl.arange(0, BLOCK_SIZE_COLS)
     input_offs = (
         block_row_offs[:, None] * input_stride_row
         + block_col_offs[None, :] * input_stride_col
@@ -137,25 +132,21 @@ def to_fp8_row_major_t(
     input_mask = (block_row_offs[:, None] < input_num_rows) & (
         block_col_offs[None, :] < input_num_cols
     )
-
     vals = tl.load(input_ptr + input_offs, mask=input_mask).to(input_dtype)
 
     # perform conversion
     vals = vals * scale
     fp8_vals = tl.clamp(vals, min=fp8_dtype_min, max=fp8_dtype_max).to(output_dtype)
-    fp8_vals = fp8_vals.trans(1, 0)
 
     # write back in tranposed output tensor
     out_offs = (
         block_col_offs[:, None] * output_stride_row
         + block_row_offs[None, :] * output_stride_col
     )
-
     out_mask = (block_row_offs[:, None] < output_num_rows) & (
         block_col_offs[None, :] < output_num_cols
     )
-
-    tl.store(out_ptr + out_offs, fp8_vals, mask=out_mask)
+    tl.store(out_ptr + out_offs, fp8_vals.trans(1, 0), mask=out_mask)
 
 
 @triton.autotune(
@@ -163,7 +154,7 @@ def to_fp8_row_major_t(
     key=["num_elements"],
 )
 @triton.jit
-def to_fp8_col_major(
+def _to_fp8_col_major(
     input_ptr,
     out_ptr,
     scale_ptr,
@@ -235,13 +226,8 @@ def to_fp8_col_major_t(
     # load block of input tensor
     block_row_start = block_row_id * BLOCK_SIZE_ROWS
     block_col_start = block_col_id * BLOCK_SIZE_COLS
-
-    row_offs = tl.arange(0, BLOCK_SIZE_ROWS)
-    col_offs = tl.arange(0, BLOCK_SIZE_COLS)
-
-    block_row_offs = block_row_start + row_offs
-    block_col_offs = block_col_start + col_offs
-
+    block_row_offs = block_row_start + tl.arange(0, BLOCK_SIZE_ROWS)
+    block_col_offs = block_col_start + tl.arange(0, BLOCK_SIZE_COLS)
     input_offs = (
         block_row_offs[:, None] * input_stride_row
         + block_col_offs[None, :] * input_stride_col
@@ -249,7 +235,6 @@ def to_fp8_col_major_t(
     input_mask = (block_row_offs[:, None] < input_num_rows) & (
         block_col_offs[None, :] < input_num_cols
     )
-
     vals = tl.load(input_ptr + input_offs, mask=input_mask).to(input_dtype)
 
     # perform conversion
@@ -262,11 +247,9 @@ def to_fp8_col_major_t(
         block_col_offs[:, None] * output_stride_row
         + block_row_offs[None, :] * output_stride_col
     )
-
     out_mask = (block_row_offs[:, None] < output_num_rows) & (
         block_col_offs[None, :] < output_num_cols
     )
-
     tl.store(out_ptr + out_offs, fp8_vals, mask=out_mask)
 
 
@@ -275,7 +258,7 @@ def to_fp8_col_major_t(
     key=["num_elements"],
 )
 @triton.jit
-def to_fp8_row_and_col_major(
+def _to_fp8_row_and_col_major(
     input_ptr,
     row_major_out_ptr,
     col_major_out_ptr,
@@ -310,18 +293,18 @@ def to_fp8_row_and_col_major(
     vals = vals * scale
     fp8_vals = tl.clamp(vals, min=fp8_dtype_min, max=fp8_dtype_max).to(output_dtype)
 
-    # write to output tensors
+    # write row major output
     row_major_offs = block_row_offs[:, None] * num_cols + block_col_offs[None, :]
     tl.store(row_major_out_ptr + row_major_offs, fp8_vals, mask=mask)
 
+    # write column major output
     col_major_offs = block_col_offs[None, :] * num_rows + block_row_offs[:, None]
     tl.store(col_major_out_ptr + col_major_offs, fp8_vals, mask=mask)
 
 
-# --- kernels using atomic max approach to calculate scaling factor
 @triton.autotune(configs=kernel_configs_1D, key=["num_elements"])
 @triton.jit
-def block_amax_atomic(
+def _amax_atomic(
     input_ptr,
     amax_ptr,
     num_elements,
@@ -340,7 +323,7 @@ def block_amax_atomic(
 
 
 @triton.jit
-def fp8_scale_atomic(
+def _scale_atomic(
     amax_ptr,
     scale_out_ptr,
     fp8_dtype_max,
@@ -359,9 +342,8 @@ def fp8_scale_atomic(
     tl.store(scale_out_ptr + scale_off, scale)
 
 
-# --- kernels using reduction approach to calculate scaling factor
 @triton.jit
-def block_amax_reduction(
+def _amax_reduction(
     input_ptr,
     block_amaxes_ptr,
     num_elements,
@@ -380,7 +362,7 @@ def block_amax_reduction(
 
 
 @triton.jit
-def fp8_scale_reduction(
+def _scale_reduction(
     block_amaxes_ptr,
     scale_out_ptr,
     num_elements,
@@ -420,7 +402,7 @@ def hp_to_fp8_row_major(
     fp8_dtype_max = torch.finfo(fp8_dtype).max
 
     # compute scaling factor for tensor
-    scale = _triton_hp_tensor_to_scale(
+    scale = _hp_tensor_to_scale(
         hp_tensor,
         tl_input_dtype,
         fp8_dtype_max,
@@ -432,7 +414,7 @@ def hp_to_fp8_row_major(
         hp_tensor, dtype=fp8_dtype, device=hp_tensor.device
     )
     grid = lambda meta: (triton.cdiv(num_elements, meta["BLOCK_SIZE"]),)
-    to_fp8_row_major[grid](
+    _to_fp8_row_major[grid](
         hp_tensor,
         output_buffer,
         scale,
@@ -474,7 +456,7 @@ def hp_to_fp8_row_major_t(
     fp8_dtype_max = torch.finfo(fp8_dtype).max
 
     # compute scaling factor for tensor
-    scale = _triton_hp_tensor_to_scale(
+    scale = _hp_tensor_to_scale(
         hp_tensor,
         tl_input_dtype,
         fp8_dtype_max,
@@ -489,7 +471,7 @@ def hp_to_fp8_row_major_t(
         triton.cdiv(input_num_rows, meta["BLOCK_SIZE_ROWS"]),
         triton.cdiv(input_num_cols, meta["BLOCK_SIZE_COLS"]),
     )
-    to_fp8_row_major_t[grid](
+    _to_fp8_row_major_t[grid](
         hp_tensor,
         output_buffer,
         scale,
@@ -538,7 +520,7 @@ def hp_to_fp8_col_major(
     fp8_dtype_max = torch.finfo(fp8_dtype).max
 
     # compute scaling factor for tensor
-    scale = _triton_hp_tensor_to_scale(
+    scale = _hp_tensor_to_scale(
         hp_tensor,
         tl_input_dtype,
         fp8_dtype_max,
@@ -553,7 +535,7 @@ def hp_to_fp8_col_major(
         triton.cdiv(num_rows, meta["BLOCK_SIZE_ROWS"]),
         triton.cdiv(num_cols, meta["BLOCK_SIZE_COLS"]),
     )
-    to_fp8_col_major[grid](
+    _to_fp8_col_major[grid](
         hp_tensor,
         output_buffer,
         scale,
@@ -601,7 +583,7 @@ def hp_to_fp8_col_major_t(
     fp8_dtype_max = torch.finfo(fp8_dtype).max
 
     # compute scaling factor for tensor
-    scale = _triton_hp_tensor_to_scale(
+    scale = _hp_tensor_to_scale(
         hp_tensor,
         tl_input_dtype,
         fp8_dtype_max,
@@ -613,7 +595,7 @@ def hp_to_fp8_col_major_t(
         hp_tensor.t(), dtype=fp8_dtype, device=hp_tensor.device
     )
     grid = lambda meta: (triton.cdiv(num_elements, meta["BLOCK_SIZE"]),)
-    to_fp8_row_major[grid](
+    _to_fp8_row_major[grid](
         hp_tensor,
         output_buffer,
         scale,
@@ -652,7 +634,7 @@ def hp_to_fp8_row_and_col_major(
     fp8_dtype_max = torch.finfo(fp8_dtype).max
 
     # compute scaling factor for tensor
-    scale = _triton_hp_tensor_to_scale(
+    scale = _hp_tensor_to_scale(
         hp_tensor,
         tl_input_dtype,
         fp8_dtype_max,
@@ -677,7 +659,7 @@ def hp_to_fp8_row_and_col_major(
         triton.cdiv(num_rows, meta["BLOCK_SIZE_ROWS"]),
         triton.cdiv(num_cols, meta["BLOCK_SIZE_COLS"]),
     )
-    to_fp8_row_and_col_major[grid](
+    _to_fp8_row_and_col_major[grid](
         hp_tensor,
         fp8_output_row_major,
         fp8_output_col_major,
@@ -716,7 +698,7 @@ def hp_to_fp8_row_and_col_major(
     return fp8_tensor_row_major, fp8_tensor_col_major
 
 
-def _triton_hp_tensor_to_scale(
+def _hp_tensor_to_scale(
     hp_tensor: torch.Tensor,
     tl_input_dtype: tl.core.dtype,
     fp8_dtype_max: float,
@@ -731,7 +713,7 @@ def _triton_hp_tensor_to_scale(
     if algo == KernelAlgorithm.ATOMIC_MAX:
         global_amax = torch.zeros((1,), dtype=torch.float32, device=hp_tensor.device)
         # compute global amax to be used for scaling
-        block_amax_atomic[grid](
+        _amax_atomic[grid](
             hp_tensor,
             global_amax,
             num_elements,
@@ -740,7 +722,7 @@ def _triton_hp_tensor_to_scale(
         )
 
         # compute scale for fp8 conversion
-        fp8_scale_atomic[1, 1, 1](
+        _scale_atomic[1, 1, 1](
             global_amax,
             scale_out,
             fp8_dtype_max,
@@ -756,7 +738,7 @@ def _triton_hp_tensor_to_scale(
             (num_elements // block_size,), dtype=torch.float32, device=hp_tensor.device
         )
         # compute local amax for each block
-        block_amax_reduction[grid](
+        _amax_reduction[grid](
             hp_tensor,
             block_amaxes,
             num_elements,
@@ -767,7 +749,7 @@ def _triton_hp_tensor_to_scale(
         )
 
         # calculate global amax across all blocks and use it to compute scale
-        fp8_scale_reduction[(1, 1, 1)](
+        _scale_reduction[(1, 1, 1)](
             block_amaxes,
             scale_out,
             num_elements,

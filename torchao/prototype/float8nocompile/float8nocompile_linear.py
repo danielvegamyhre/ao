@@ -19,7 +19,6 @@ from torchao.float8.float8_tensor import GemmInputRole, LinearMMConfig, ScaledMM
 from torchao.float8.float8_utils import tensor_to_scale
 
 from torchao.prototype.float8nocompile.float8nocompile_scaling_utils import (
-    NoopFwToFloat8NoCompileBwDynamic,
     ToFP8ColumnMajor,
     ToFP8ColumnMajorT,
     ToFP8RowAndColumnMajor,
