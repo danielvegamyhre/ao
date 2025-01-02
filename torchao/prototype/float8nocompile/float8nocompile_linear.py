@@ -7,7 +7,6 @@
 A simple module swap UX for a float8 version of `torch.nn.Linear` which
 does not require `torch.compile` to be performant.
 """
-import pdb
 from typing import Optional
 
 import torch
@@ -113,36 +112,10 @@ class Float8LinearNoCompile(torch.nn.Linear):
         return new_mod
 
 
-class matmul_with_args_in_fp8(torch.autograd.Function):
-    @staticmethod
-    def forward(
-        ctx,
-        input_fp8_row_major,
-        weight_t_fp8_col_major,
-    ):
-        ctx.save_for_backward(input_fp8_row_major, weight_t_fp8_col_major)
-        output = torch.mm(input_fp8_row_major, weight_t_fp8_col_major)
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        input_fp8_row_major, weight_t_fp8_col_major = ctx.saved_tensors
-
-        # grad_input = grad_output @ weight (backward pass)
-        grad_input = torch.mm(
-            grad_output,
-            weight_t_fp8_col_major.t(),
-        )
-
-        # grad_weight = input_t @ grad_output (backward pass)
-        grad_weight = torch.mm(grad_output.t(), input_fp8_row_major)
-        return grad_input, grad_weight.t()
-
-
 class matmul_with_args_in_hp(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input_hp, weight_hp, config, linear_mm_config, kernel_algo):
-        # input @ weight_t = output (forward pass)
+        # output = input @ weight_t
         input_fp8_row_major, input_fp8_col_major = ToFP8RowAndColumnMajor.apply(
             input_hp,
             config.cast_config_input.target_dtype,
@@ -180,7 +153,7 @@ class matmul_with_args_in_hp(torch.autograd.Function):
             ctx.kernel_algo,
         )
 
-        # 1. grad_input = grad_output @ weight (backward pass)
+        # grad_input = grad_output @ weight
         weight_fp8_col_major = ToFP8ColumnMajor.apply(
             weight_hp,
             ctx.config.cast_config_weight.target_dtype,
@@ -190,8 +163,9 @@ class matmul_with_args_in_hp(torch.autograd.Function):
         )
         grad_input = torch.mm(grad_output_fp8_row_major, weight_fp8_col_major)
 
-        # 2. grad_weight = input_t @ grad_output (backward pass)
-        # TODO: find out why float8_linear.py uses grad_weight = grad_output_t @ input
+        # grad_weight = grad_output_t @ input
+        # apparently this variant is slightly faster than `grad_weight_t = input_t @ grad_output`
+        # source: https://github.com/pytorch/ao/blob/fe5f11b2c58b452e01ba9ec7359629928b143619/torchao/float8/float8_linear.py#L84-L85
         grad_output_t_row_major = ToFP8RowMajorT.apply(
             grad_output,
             ctx.config.cast_config_grad_output.target_dtype,
@@ -201,3 +175,29 @@ class matmul_with_args_in_hp(torch.autograd.Function):
         )
         grad_weight = torch.mm(grad_output_t_row_major, input_fp8_col_major)
         return grad_input, grad_weight, None, None, None
+
+
+class matmul_with_args_in_fp8(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        input_fp8_row_major,
+        weight_t_fp8_col_major,
+    ):
+        ctx.save_for_backward(input_fp8_row_major, weight_t_fp8_col_major)
+        output = torch.mm(input_fp8_row_major, weight_t_fp8_col_major)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input_fp8_row_major, weight_t_fp8_col_major = ctx.saved_tensors
+
+        # grad_input = grad_output @ weight (backward pass)
+        grad_input = torch.mm(
+            grad_output,
+            weight_t_fp8_col_major.t(),
+        )
+
+        # grad_weight = input_t @ grad_output (backward pass)
+        grad_weight = torch.mm(grad_output.t(), input_fp8_row_major)
+        return grad_input, grad_weight.t()

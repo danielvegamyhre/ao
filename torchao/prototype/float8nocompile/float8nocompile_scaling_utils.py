@@ -175,35 +175,3 @@ class ToFP8ColumnMajorT(torch.autograd.Function):
     @staticmethod
     def backward(ctx, g):
         return g, None, None, None, None
-
-
-class NoopFwToFloat8NoCompileBwDynamic(torch.autograd.Function):
-    """
-    A differentiable conversion to fp8.
-    * forward: no-op
-    * backward: convert to float8 with tensor-wise dynamic scaling
-    """
-
-    @staticmethod
-    def forward(
-        ctx,
-        tensor: torch.Tensor,
-        float8_dtype: torch.dtype,
-        linear_mm_config: LinearMMConfig,
-        kernel_algo: KernelAlgorithm = KernelAlgorithm.ATOMIC_MAX,
-    ):
-        ctx.linear_mm_config = linear_mm_config
-        ctx.target_dtype = float8_dtype
-        ctx.kernel_algo = kernel_algo
-        return tensor
-
-    @staticmethod
-    def backward(ctx, gradY):
-        fp8_tensor_row_major = hp_to_fp8_row_major(
-            gradY,
-            ctx.target_dtype,
-            ctx.linear_mm_config,
-            GemmInputRole.GRAD_OUTPUT,
-            ctx.kernel_algo,
-        )
-        return fp8_tensor_row_major, None, None, None
